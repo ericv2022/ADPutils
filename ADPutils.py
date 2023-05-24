@@ -418,16 +418,32 @@ def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, n
             f.close()
 
             myia.open(img_sky_pbuncor)
+            
+            img_shape = myia.shape()
+
+            found = False
 
             fit_width1 = round(fit_width/2.)
-            src_box = str(peakX-fit_width1)+','+str(peakY-fit_width1)+','+str(peakX+fit_width1)+','+str(peakY+fit_width1)
-            src_dict1 = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates='temp_estimates.txt', logfile='temp_logfile.txt')
+            
+            if peakX-fit_width1 > 0 and peakY-fit_width1 > 0 and peakX+fit_width1 < img_shape[0]-1 and peakY+fit_width1 < img_shape[1]-1:
+            
+                src_box = str(peakX-fit_width1)+','+str(peakY-fit_width1)+','+str(peakX+fit_width1)+','+str(peakY+fit_width1)
+                src_dict1 = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates='temp_estimates.txt', logfile='temp_logfile.txt')
 
-            fit_width1 = round( 3 * src_dict1['results']['component0']['shape']['majoraxis']['value'] * max(src_dict1['pixelsperarcsec']) / 2.) # convert value of 3 into an input parameter
-            src_box = str(peakX-fit_width1)+','+str(peakY-fit_width1)+','+str(peakX+fit_width1)+','+str(peakY+fit_width1)
-            src_dict1 = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates='temp_estimates.txt', logfile='temp_logfile.txt')
+                if src_dict1['converged'][0] == True:
+
+                    fit_width1 = round( 3 * src_dict1['results']['component0']['shape']['majoraxis']['value'] * max(src_dict1['pixelsperarcsec']) / 2.) # convert value of 3 into an input parameter
+
+                    if peakX-fit_width1 > 0 and peakY-fit_width1 > 0 and peakX+fit_width1 < img_shape[0]-1 and peakY+fit_width1 < img_shape[1]-1:
+
+                        src_box = str(peakX-fit_width1)+','+str(peakY-fit_width1)+','+str(peakX+fit_width1)+','+str(peakY+fit_width1)
+                        src_dict1 = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates='temp_estimates.txt', logfile='temp_logfile.txt')
+                    
+                        found = True
 
             myia.close()
+
+            if found == False: continue
 
             myia.open(img_sky_pbcor)
             if abs(src_dict1['zerooff']['value']/img_rms) < zerooff_snr:
@@ -474,6 +490,7 @@ def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, n
                 src_dict2[j]['pixelsperarcsec'] = src_dict2[j]['pixelsperarcsec'].tolist()
                 src_dict2[j]['flux']['error'] = src_dict2[j]['flux']['error'].tolist()
                 src_dict2[j]['flux']['value'] = src_dict2[j]['flux']['value'].tolist()
+                if 'zerooff' in src_dict2[j].keys(): src_dict2[j]['zerooff']['value'] = src_dict2[j]['zerooff']['value'].tolist()
 
         fname = img_sky_pbcor.replace('.fits', '.sourcelist.json')
         with open(fname, 'w') as outfile:
