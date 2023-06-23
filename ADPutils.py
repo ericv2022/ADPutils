@@ -141,6 +141,8 @@ def queryArchive(uidList=[], uidListFile='', forceDownload=False, sciOnly=True, 
                 if re.search('weblog', os.path.basename(url)) != None:
                     url_list.append(url)
 
+            print(url_list)
+
             if len(url_list) == 1:
 
                 filename = os.path.basename(url_list[0])
@@ -313,32 +315,33 @@ def extractSources(uidList=[], uidListFile=''):
         dirname = uid.replace('/', '_').replace(':', '_')
         fname = glob.glob(dirname+'/*.pbcor.fits')
 
-        if len(fname) != 0:
-            for i in fname:
-                image_fname.append(i)
+        for i in fname:
+            image_fname.append(i)
 
-    f = open('temp_imagelist.txt', 'w')
-    for i in image_fname:
-        f.write(i+'\n')
-    f.close()
+    if len(image_fname) != 0:
 
-    with open('temp_casascript.py', "w") as f:
-        f.write("import os\n")
-        f.write("import sys\n")
-        f.write("import json\n")
-        f.write("sys.path.append('"+os.getcwd()+"')\n")
-        f.write("import ADPutils as au\n")
-        f.write("\n")
-        f.write("f = open('temp_imagelist.txt')\n")
-        f.write("image_fname = f.read().splitlines()\n")
-        f.write("f.close()\n")
-        f.write("\n")
-        f.write("for i in range(len(image_fname)):\n")
-        f.write("    src_dict = au.extractSourcesFromImage(image_fname[i])\n")
+        f = open('temp_imagelist.txt', 'w')
+        for i in image_fname:
+            f.write(i+'\n')
+        f.close()
 
-    f.close()
+        with open('temp_casascript.py', "w") as f:
+            f.write("import os\n")
+            f.write("import sys\n")
+            f.write("import json\n")
+            f.write("sys.path.append('"+os.getcwd()+"')\n")
+            f.write("import ADPutils as au\n")
+            f.write("\n")
+            f.write("f = open('temp_imagelist.txt')\n")
+            f.write("image_fname = f.read().splitlines()\n")
+            f.write("f.close()\n")
+            f.write("\n")
+            f.write("for i in range(len(image_fname)):\n")
+            f.write("    src_dict = au.extractSourcesFromImage(image_fname[i])\n")
 
-    subprocess.run('/usr/local/bin/casa --agg --nologger -c "temp_casascript.py"', shell=True)
+        f.close()
+
+        subprocess.run('/usr/local/bin/casa --agg --nologger -c "temp_casascript.py"', shell=True)
 
 def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, nmax_src=1000, zerooff_snr=3, write_to_file=True):
 
@@ -497,16 +500,6 @@ def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, n
             json.dump(src_dict2, outfile)
         outfile.close()
 
-#         fname = img_sky_pbcor.replace('.fits', '.sourcelist.txt')
-#         with open(fname, 'w') as outfile:
-#             for j in src_dict2.keys():
-#                 src_ra = src_dict2[j]['shape']['direction']['RA'][0]
-#                 src_dec = src_dict2[j]['shape']['direction']['DEC'][0]
-#                 src_flux_val = str(src_dict2[j]['flux']['value'][0])
-#                 src_flux_err = str(src_dict2[j]['flux']['error'][0])
-#                 outfile.write(','.join([src_ra, src_dec, src_flux_val, src_flux_err])+'\n')
-#         outfile.close()
-
     return(src_dict2)
 
 def create_ellipse(center, axes, inclination):
@@ -564,41 +557,7 @@ def filterSources(src_dict, pointSourcesOnly=True, noBackgroundEmission=True, is
 
     return(src_dict1)
 
-def exportSources(src_dict):
-
-    src_dict1 = {}
-    src_dict1['image filename'] = []
-    src_dict1['RA'] = []
-    src_dict1['DEC'] = []
-    src_dict1['flux'] = []
-    src_dict1['flux error'] = []
-
-    for i in src_dict.keys():
-
-        src_dict1['image filename'].append(os.path.basename(src_dict[i]['image filename']))
-        src_dict1['RA'].append(src_dict[i]['shape']['direction']['RA'][0])
-        src_dict1['DEC'].append(src_dict[i]['shape']['direction']['DEC'][0])
-        src_dict1['flux'].append(src_dict[i]['flux']['value'][0])
-        src_dict1['flux error'].append(src_dict[i]['flux']['error'][0])
-
-    src_df = pd.DataFrame(src_dict1)
-
-    src_csv_data = src_df.to_csv('SourceList.csv', index = True)
-
-#     hdr = fits.Header()
-#     hdr['OBSERVER'] = 'ALMA'
-#     empty_primary = fits.PrimaryHDU(header=hdr)
-#
-#     df_rec = df.filter(items=['ra', 'dec', 'flux', 'flux_error', 'rms']).to_records(index=False)
-#     table_hdu = fits.BinTableHDU(data=df_rec)
-#
-#     hdul = fits.HDUList([empty_primary, table_hdu])
-#
-#     hdul.writeto('results.fits')
-
-    return(src_df)
-
-def generateCatalog(uidList=[], uidListFile='', filterSourceList=True):
+def generateCatalog(uidList=[], uidListFile='', runFilterSources=True):
 
     if uidListFile != '':
         f = open(uidListFile)
@@ -612,11 +571,15 @@ def generateCatalog(uidList=[], uidListFile='', filterSourceList=True):
         dirname = uid.replace('/', '_').replace(':', '_')
         fname = glob.glob(dirname+'/*.sourcelist.json')
 
-        if len(fname) != 0:
-            for i in fname:
-                sourcelist_fname.append(i)
+        for i in fname:
+            sourcelist_fname.append(i)
 
     src_dict = {}
+    src_dict['RA'] = []
+    src_dict['DEC'] = []
+    src_dict['flux'] = []
+    src_dict['flux error'] = []
+    src_dict['image filename'] = []
 
     for i in sourcelist_fname:
         
@@ -624,30 +587,18 @@ def generateCatalog(uidList=[], uidListFile='', filterSourceList=True):
             src_dict1 = json.load(f)
         f.close()
 
-        for j in src_dict1.keys():
+        if runFilterSources == True:
+            src_dict1 = filterSources(src_dict1)
 
-            ij = len(src_dict)
-            src_dict[ij] = src_dict1[j]
+        for i in src_dict1.keys():
 
-    if filterSourceList == True:
-        src_dict = filterSources(src_dict)
+            src_dict['RA'].append(src_dict1[i]['shape']['direction']['RA'][0])
+            src_dict['DEC'].append(src_dict1[i]['shape']['direction']['DEC'][0])
+            src_dict['flux'].append(src_dict1[i]['flux']['value'][0])
+            src_dict['flux error'].append(src_dict1[i]['flux']['error'][0])
+            src_dict['image filename'].append(os.path.basename(src_dict1[i]['image filename']))
 
-    src_dict1 = {}
-    src_dict1['image filename'] = []
-    src_dict1['RA'] = []
-    src_dict1['DEC'] = []
-    src_dict1['flux'] = []
-    src_dict1['flux error'] = []
-
-    for i in src_dict.keys():
-
-        src_dict1['image filename'].append(os.path.basename(src_dict[i]['image filename']))
-        src_dict1['RA'].append(src_dict[i]['shape']['direction']['RA'][0])
-        src_dict1['DEC'].append(src_dict[i]['shape']['direction']['DEC'][0])
-        src_dict1['flux'].append(src_dict[i]['flux']['value'][0])
-        src_dict1['flux error'].append(src_dict[i]['flux']['error'][0])
-
-    src_df = pd.DataFrame(src_dict1)
+    src_df = pd.DataFrame(src_dict)
 
     src_csv_data = src_df.to_csv('catalog.csv', index = False)
 
@@ -691,6 +642,8 @@ def extractMetadata(uidList=[], uidListFile=''):
         PLweblog = glob.glob('pipeline-*')
         if len(PLweblog) == 1:
             df_PLweblog = readPLweblog(path=PLweblog[0])
+        else:
+            print(PLweblog)
 
         filename = glob.glob('*.pbcor.fits')
 
@@ -707,9 +660,10 @@ def extractMetadata(uidList=[], uidListFile=''):
                 if keyw in ['BMAJ', 'BMIN', 'ROBUST']:
                     df_dict[keyw] = [hdr_info[j][1]]
 
-            ij = np.where(df_PLweblog['PL image filename'].str.contains(filename[i].replace('member.', '')) == True)[0]
-            if len(ij) == 1:
+            if 'PL image filename' in df_PLweblog.columns:
 
+                ij = np.where(df_PLweblog['PL image filename'].str.contains(filename[i].replace('member.', '')) == True)[0]
+                if len(ij) == 1:
 
 # Index(['field', 'intent', 'spw', 'phasecenter', 'cell', 'imsize', 'imagename',
 #        'specmode', 'start', 'width', 'nbin', 'nchan', 'robust', 'nterms',
@@ -722,39 +676,39 @@ def extractMetadata(uidList=[], uidListFile=''):
 #        'channels', 'PL image filename'],
 #       dtype='object')
 
-                if 'cell' in df_PLweblog.columns:
+                    if 'cell' in df_PLweblog.columns:
 
-                    cellsize = re.findall('[0-9E\.]+ *arcsec', df_PLweblog.at[ij[0], 'cell'], re.IGNORECASE)
-                    if len(cellsize) > 0:
-                        df_dict['CELL'] = [float(cellsize[0].upper().replace('ARCSEC', ''))]
+                        cellsize = re.findall('[0-9E\.]+ *arcsec', df_PLweblog.at[ij[0], 'cell'], re.IGNORECASE)
+                        if len(cellsize) > 0:
+                            df_dict['CELL'] = [float(cellsize[0].upper().replace('ARCSEC', ''))]
 
-                if 'ROBUST' not in df_dict.keys() and 'robust' in df_PLweblog.columns:
+                    if 'ROBUST' not in df_dict.keys() and 'robust' in df_PLweblog.columns:
 
-                    robustfactor = re.findall('-?[0-2](\.[0-9]+)?', str(df_PLweblog.at[ij[0], 'robust']))
-                    if len(robustfactor) > 0:
-                        df_dict['ROBUST'] = [float(robustfactor[0])]
+                        robustfactor = re.findall('-?[0-2](\.[0-9]+)?', str(df_PLweblog.at[ij[0], 'robust']))
+                        if len(robustfactor) > 0:
+                            df_dict['ROBUST'] = [float(robustfactor[0])]
 
-                if 'final theoretical sensitivity' in df_PLweblog.columns:
+                    if 'final theoretical sensitivity' in df_PLweblog.columns:
 
-                    rms0 = re.findall('[0-9E\.\-]+ *m?jy/beam', df_PLweblog.at[ij[0], 'final theoretical sensitivity'], re.IGNORECASE)
-                    if len(rms0) > 0:
-                        rms0 = rms0[0]
-                        if re.search('mjy/beam', rms0, re.IGNORECASE) != None:
-                            df_dict['RMS0'] = [float(rms0.upper().replace('MJY/BEAM', ''))/1000.]
-                        else:
-                            if re.search('jy/beam', rms0, re.IGNORECASE) != None:
-                                df_dict['RMS0'] = [float(rms0.upper().replace('JY/BEAM', ''))]
+                        rms0 = re.findall('[0-9E\.\-]+ *m?jy/beam', df_PLweblog.at[ij[0], 'final theoretical sensitivity'], re.IGNORECASE)
+                        if len(rms0) > 0:
+                            rms0 = rms0[0]
+                            if re.search('mjy/beam', rms0, re.IGNORECASE) != None:
+                                df_dict['RMS0'] = [float(rms0.upper().replace('MJY/BEAM', ''))/1000.]
+                            else:
+                                if re.search('jy/beam', rms0, re.IGNORECASE) != None:
+                                    df_dict['RMS0'] = [float(rms0.upper().replace('JY/BEAM', ''))]
 
-                if 'non-pbcor image RMS' in df_PLweblog.columns:
+                    if 'non-pbcor image RMS' in df_PLweblog.columns:
 
-                    rms1 = re.findall('[0-9E\.\-]+ *m?jy/beam', df_PLweblog.at[ij[0], 'non-pbcor image RMS'], re.IGNORECASE)
-                    if len(rms1) > 0:
-                        rms1 = rms1[0]
-                        if re.search('mjy/beam', rms1, re.IGNORECASE) != None:
-                            df_dict['RMS1'] = [float(rms1.upper().replace('MJY/BEAM', ''))/1000.]
-                        else:
-                            if re.search('jy/beam', rms1, re.IGNORECASE) != None:
-                                df_dict['RMS1'] = [float(rms1.upper().replace('JY/BEAM', ''))]
+                        rms1 = re.findall('[0-9E\.\-]+ *m?jy/beam', df_PLweblog.at[ij[0], 'non-pbcor image RMS'], re.IGNORECASE)
+                        if len(rms1) > 0:
+                            rms1 = rms1[0]
+                            if re.search('mjy/beam', rms1, re.IGNORECASE) != None:
+                                df_dict['RMS1'] = [float(rms1.upper().replace('MJY/BEAM', ''))/1000.]
+                            else:
+                                if re.search('jy/beam', rms1, re.IGNORECASE) != None:
+                                    df_dict['RMS1'] = [float(rms1.upper().replace('JY/BEAM', ''))]
 
             dff = pd.DataFrame(df_dict)
             df = pd.concat([df, dff], ignore_index=True)
