@@ -7,7 +7,7 @@ import shutil
 import tarfile
 import subprocess
 import numpy as np
-
+from multiprocessing.pool import ThreadPool
 
 try:
     import pandas as pd
@@ -45,123 +45,97 @@ try:
 except:
     print('shapely module could not be loaded')
 
+try:
+    import requests
+except:
+    print('requests module could not be loaded')
 
-def queryArchive(uidList=[], uidListFile='', forceDownload=False, sciOnly=True, mfsOnly=True, PLweblog=False):
 
-    topdirname = os.getcwd()
 
-    if uidListFile != '':
-        f = open(uidListFile)
-        uidList = f.read().splitlines()
-        f.close()
 
-    df = pd.DataFrame()
+def downloadImagesPerMOUS(MOUSuid, mfsOnly = True, sciOnly = True, PLweblog = True):
 
-    for uid in uidList:
+    datalink = pyvo.dal.adhoc.DatalinkResults.from_result_url(f"https://almascience.eso.org/datalink/sync?ID={MOUSuid}")
+    data_info = datalink.to_table().to_pandas()
 
-        os.chdir(topdirname)
+    for i in data_info.index:
 
-        dirname = uid.replace('/', '_').replace(':', '_')
+        if re.search('^DataLink', data_info['service_def'][i], re.I) != None:
 
-        if os.path.isdir(dirname) == False:
-            os.mkdir(dirname)
+            uid = data_info['service_def'][i].replace('DataLink.', '')
+            datalink = pyvo.dal.adhoc.DatalinkResults.from_result_url(f"https://almascience.eso.org/datalink/sync?ID={uid}")
+            data_info1 = datalink.to_table().to_pandas()
 
-        os.chdir(dirname)
+            data_info = pd.concat([data_info, data_info1], ignore_index=True)
 
-        datalink = pyvo.dal.adhoc.DatalinkResults.from_result_url(f"https://almascience.eso.org/datalink/sync?ID={uid}")
-        data_info = datalink.to_table().to_pandas()
+    fnamePattern = '\.pbcor\.fits$'
+    if mfsOnly == True: fnamePattern = '\.mfs\..*' + fnamePattern
+    if sciOnly == True: fnamePattern = '_sci\..*' + fnamePattern
 
-        for i in data_info.index:
+    urlList = []
+    fitsImageList = []
 
-            if re.search('^DataLink', data_info['service_def'][i], re.I) != None:
+    for url in data_info['access_url']:
 
-                uid = data_info['service_def'][i].replace('DataLink.', '')
-                datalink = pyvo.dal.adhoc.DatalinkResults.from_result_url(f"https://almascience.eso.org/datalink/sync?ID={uid}")
-                data_info1 = datalink.to_table().to_pandas()
+        fname = os.path.basename(url)
 
-                data_info = pd.concat([data_info, data_info1], ignore_index=True)
+        if re.search(fnamePattern, fname) != None:
 
-        df_dict = {}
-        df_dict['image file url'] = []
-        df_dict['image filename'] = []
-        df_dict['PB file url'] = []
-        df_dict['PB filename'] = []
+            fname = fname.replace('.pbcor.fits', '.pb.fits.gz')
 
-        for url in data_info['access_url']:
+            urlList1 = []
 
-            filename = os.path.basename(url)
+            for url1 in data_info['access_url']:
 
-            filenamePattern = '.pbcor.fits$'
-            if mfsOnly == True: filenamePattern = '.mfs.*' + filenamePattern
-            if sciOnly == True: filenamePattern = '_sci.*' + filenamePattern
+                if re.search(fname, os.path.basename(url1)) != None:
+                    urlList1.append(url1)
 
-            if re.search(filenamePattern, filename) != None:
-                df_dict['image file url'].append(url)
-                df_dict['image filename'].append(filename)
+                if len(urlList1) == 1:
+                    urlList.append(url)
+                    urlList.append(urlList1[0])
 
-        for filename in df_dict['image filename']:
+        if PLweblog == True and re.search('weblog', fname) != None:
+            urlList.append(url)
 
-            filename = filename.replace('.pbcor.fits', '.pb.fits.gz')
+    urlList = np.unique(urlList)
 
-            url_list = []
+    urlList1 = []
+    for url in urlList:
+        urlList1.append(tuple([os.path.basename(url), url]))
 
-            for url in data_info['access_url']:
+    fitsImageList = []
 
-                if re.search(filename, os.path.basename(url)) != None:
-                    url_list.append(url)
+    for i in range(len(urlList1)):
 
-            if len(url_list) == 1:
-                df_dict['PB file url'].append(url_list[0])
-                df_dict['PB filename'].append(os.path.basename(url_list[0]).replace('.gz', ''))
-            else:
-                df_dict['PB file url'].append('')
-                df_dict['PB filename'].append('')
+        fetch_url(urlList1[i])
 
-        df1 = pd.DataFrame(df_dict)
-        df = pd.concat([df, df1], ignore_index=True)
+        if re.search('\.pbcor\.fits$', urlList1[i][0]) != None:
+            fitsImageList.append(urlList1[i][0])
 
-        for i in range(len(df_dict['image file url'])):
+        if re.search('\.gz$', urlList1[i][0]) != None:
+            os.system('gunzip '+urlList1[i][0])
 
-            if os.path.exists(df_dict['image filename'][i]) == False or forceDownload == True:
-                os.system('curl -O '+df_dict['image file url'][i])
+        if re.search('\.tgz$', urlList1[i][0]) != None:
 
-            if os.path.exists(df_dict['PB filename'][i]) == False or forceDownload == True:
+            tar = tarfile.open(os.path.basename(urlList1[i][0]))
+            weblog_path = tar.getnames()[0].split('/')[0]
+            tar.extractall()
+            tar.close()
 
-                os.system('curl -O '+df_dict['PB file url'][i])
+            os.rename(weblog_path, os.path.basename(urlList1[i][0]).replace('.tgz', '')+'.'+weblog_path)
+            os.remove(os.path.basename(urlList1[i][0]))
 
-                filename = os.path.basename(df_dict['PB file url'][i])
-                os.system('gunzip '+filename)
+    return(fitsImageList)
 
-        if PLweblog == True:
-
-            url_list = []
-
-            for url in data_info['access_url']:
-
-                if re.search('weblog', os.path.basename(url)) != None:
-                    url_list.append(url)
-
-            print(url_list)
-
-            if len(url_list) == 1:
-
-                filename = os.path.basename(url_list[0])
-
-                if os.path.exists(filename) == False or forceDownload == True:
-                    os.system('curl -O '+url_list[0])
-
-                tar = tarfile.open(filename)
-                weblog_path = tar.getnames()[0].split('/')[0]
-                tar.extractall()
-                tar.close()
-
-            else:
-
-                print('ERROR: multiple PL weblogs found in archive. Skipping.')
-
-    os.chdir(topdirname)
-
-    return(df)
+def fetch_url(entry):
+    path, uri = entry
+    if not os.path.exists(path):
+        r = requests.get(uri, stream=True)
+        if r.status_code == 200:
+            with open(path, 'wb') as f:
+                for chunk in r:
+                    f.write(chunk)
+    return path
 
 def readPLweblog(path=''):
 
@@ -301,60 +275,91 @@ def readPLweblogPage(path='', stage='', template='', PLversion=''):
 
     return(df)
 
-def extractSources(uidList=[], uidListFile=''):
 
-    if uidListFile != '':
-        f = open(uidListFile)
-        uidList = f.read().splitlines()
+def extractSources(uidListFile=''):
+
+    f = open(uidListFile)
+    uidList = f.read().splitlines()
+    f.close()
+
+    result = ThreadPool(8).imap_unordered(extractSourcesPerMOUS, uidList)
+
+#     for result in ThreadPool(8).imap_unordered(extractSources, uidList):
+#         for ij in result:
+#             fitsImageList.append(ij)
+
+
+def extractSourcesPerMOUS(MOUSuid, runFilterSources=True, runMakeSourceList=True):
+
+    MOUSuid1 = MOUSuid.replace('://', '___').replace('/', '_')
+
+    fitsImageList = downloadImagesPerMOUS(MOUSuid)
+
+    f = open('member.'+MOUSuid1+'.casascript.py', 'w')
+    f.write("import os\n")
+    f.write("import sys\n")
+    f.write("import json\n")
+    f.write("sys.path.append('/Users/evillard/software/ADPutils')\n")
+    f.write("import ADPutils as au\n")
+    f.write("\n")
+    f.write("image_fname = ['")
+    f.write("',\n'".join(fitsImageList))
+    f.write("']\n")
+    f.write("\n")
+    f.write("src_dict = {}\n")
+    f.write("\n")
+    f.write("for i in range(len(image_fname)):\n")
+    f.write("    img_pb = image_fname[i].replace('.pbcor.fits', '.pb.fits')\n")
+    f.write("    if os.path.exists(img_pb) == True:\n")
+    f.write("        src_dict1 = au.extractSourcesFromImage(image_fname[i], img_pb)\n")
+    f.write("        if len(src_dict1.keys()) != 0:\n")
+    f.write("            if len(src_dict.keys()) == 0:\n")
+    f.write("                ij = 0\n")
+    f.write("            else:\n")
+    f.write("                ij = max(src_dict.keys()) + 1\n")
+    f.write("            for j in src_dict1.keys():\n")
+    f.write("                src_dict[ij+j] = src_dict1[j]\n")
+    f.write("\n")
+    f.write("f = open('member."+MOUSuid1+".sources.json', 'w')\n")
+    f.write("json.dump(src_dict, f)\n")
+    f.write("f.close()\n")
+    f.close()
+
+    subprocess.run('/usr/local/bin/casa --agg --nologger -c "member.'+MOUSuid1+'.casascript.py"', shell=True)
+
+    if runFilterSources == True:
+
+        f = open('member.'+MOUSuid1+'.sources.json')
+        src_dict = json.load(f)
         f.close()
 
-    image_fname = []
+        src_dict1 = filterSources(src_dict)
 
-    for uid in uidList:
-
-        dirname = uid.replace('/', '_').replace(':', '_')
-        fname = glob.glob(dirname+'/*.pbcor.fits')
-
-        for i in fname:
-            image_fname.append(i)
-
-    if len(image_fname) != 0:
-
-        f = open('temp_imagelist.txt', 'w')
-        for i in image_fname:
-            f.write(i+'\n')
+        f = open('member.'+MOUSuid1+'.sources.json', 'w')
+        json.dump(src_dict1, f)
         f.close()
 
-        with open('temp_casascript.py', "w") as f:
-            f.write("import os\n")
-            f.write("import sys\n")
-            f.write("import json\n")
-            f.write("sys.path.append('"+os.getcwd()+"')\n")
-            f.write("import ADPutils as au\n")
-            f.write("\n")
-            f.write("f = open('temp_imagelist.txt')\n")
-            f.write("image_fname = f.read().splitlines()\n")
-            f.write("f.close()\n")
-            f.write("\n")
-            f.write("for i in range(len(image_fname)):\n")
-            f.write("    src_dict = au.extractSourcesFromImage(image_fname[i])\n")
+    if runMakeSourceList == True:
 
+        f = open('member.'+MOUSuid1+'.sources.json')
+        src_dict = json.load(f)
         f.close()
 
-        subprocess.run('/usr/local/bin/casa --agg --nologger -c "temp_casascript.py"', shell=True)
+        src_dict1 = makeSourceList(src_dict)
 
-def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, nmax_src=1000, zerooff_snr=3, write_to_file=True):
+        f = open('member.'+MOUSuid1+'.sourcelist.json', 'w')
+        json.dump(src_dict1, f)
+        f.close()
+
+
+def extractSourcesFromImage(img_sky_pbcor, img_pb, min_snr=6, fit_width=10, nmax_src=1000, zerooff_snr=3):
 
     myia = iatool()
     myqa = qatool()
 
-    if img_pb == '':
-        img_pb = img_sky_pbcor.replace('.pbcor.fits', '.pb.fits')
-        if os.path.exists(img_pb) == False:
-            print('ERROR: no PB file found.')
-            return({})
+    prefix1 = img_sky_pbcor.replace('pbcor.fits', '')
 
-    img_sky_pbuncor = 'temp_pbuncor.image'
+    img_sky_pbuncor = prefix1+'pbuncor.image'
 
     myia.open(img_sky_pbcor)
     myia.pbcor(pbimage=img_pb, outfile=img_sky_pbuncor, mode='multiply', overwrite=True)
@@ -416,22 +421,22 @@ def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, n
             bPa = src_dict['component'+str(i)]['shape']['positionangle']['value']
             bPaUnit = src_dict['component'+str(i)]['shape']['positionangle']['unit']
 
-            with open('temp_estimates.txt', 'w') as f:
+            with open(prefix1+'estimates.txt', 'w') as f:
                 f.write(f"{peakI}, {peakX}, {peakY}, {bMaj}{bMajUnit}, {bMin}{bMinUnit}, {bPa}{bPaUnit}\n")
             f.close()
 
             myia.open(img_sky_pbuncor)
-            
+        
             img_shape = myia.shape()
 
             found = False
 
             fit_width1 = round(fit_width/2.)
-            
+        
             if peakX-fit_width1 > 0 and peakY-fit_width1 > 0 and peakX+fit_width1 < img_shape[0]-1 and peakY+fit_width1 < img_shape[1]-1:
-            
+        
                 src_box = str(peakX-fit_width1)+','+str(peakY-fit_width1)+','+str(peakX+fit_width1)+','+str(peakY+fit_width1)
-                src_dict1 = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates='temp_estimates.txt', logfile='temp_logfile.txt')
+                src_dict1 = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates=prefix1+'estimates.txt', logfile=prefix1+'logfile.txt')
 
                 if src_dict1['converged'][0] == True:
 
@@ -440,8 +445,8 @@ def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, n
                     if peakX-fit_width1 > 0 and peakY-fit_width1 > 0 and peakX+fit_width1 < img_shape[0]-1 and peakY+fit_width1 < img_shape[1]-1:
 
                         src_box = str(peakX-fit_width1)+','+str(peakY-fit_width1)+','+str(peakX+fit_width1)+','+str(peakY+fit_width1)
-                        src_dict1 = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates='temp_estimates.txt', logfile='temp_logfile.txt')
-                    
+                        src_dict1 = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates=prefix1+'estimates.txt', logfile=prefix1+'logfile.txt')
+                
                         found = True
 
             myia.close()
@@ -450,9 +455,9 @@ def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, n
 
             myia.open(img_sky_pbcor)
             if abs(src_dict1['zerooff']['value']/img_rms) < zerooff_snr:
-                src_dict['component'+str(i)]['fitcomp'] = myia.fitcomponents(box=src_box, rms=img_rms, dooff=False, estimates='temp_estimates.txt', logfile='temp_logfile.txt')
+                src_dict['component'+str(i)]['fitcomp'] = myia.fitcomponents(box=src_box, rms=img_rms, dooff=False, estimates=prefix1+'estimates.txt', logfile=prefix1+'logfile.txt')
             else:
-                src_dict['component'+str(i)]['fitcomp'] = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates='temp_estimates.txt', logfile='temp_logfile.txt')
+                src_dict['component'+str(i)]['fitcomp'] = myia.fitcomponents(box=src_box, rms=img_rms, dooff=True, estimates=prefix1+'estimates.txt', logfile=prefix1+'logfile.txt')
             myia.close()
 
         for i in range(src_dict['nelements']):
@@ -481,11 +486,9 @@ def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, n
 
             src_dict1['image filename'] = img_sky_pbcor
             src_dict1['shape']['direction']['RA'] = myqa.angle(src_dict1['shape']['direction']['m0'], form=['time'], prec=9)
-            src_dict1['shape']['direction']['DEC'] = myqa.angle(src_dict1['shape']['direction']['m1'], form=['time'], prec=9)
+            src_dict1['shape']['direction']['DEC'] = myqa.angle(src_dict1['shape']['direction']['m1'], prec=9)
 
             src_dict2[i] = src_dict1
-
-    if write_to_file == True:
 
         if src_dict2 != {}:
             for j in src_dict2.keys():
@@ -495,10 +498,7 @@ def extractSourcesFromImage(img_sky_pbcor, img_pb='', min_snr=6, fit_width=10, n
                 src_dict2[j]['flux']['value'] = src_dict2[j]['flux']['value'].tolist()
                 if 'zerooff' in src_dict2[j].keys(): src_dict2[j]['zerooff']['value'] = src_dict2[j]['zerooff']['value'].tolist()
 
-        fname = img_sky_pbcor.replace('.fits', '.sourcelist.json')
-        with open(fname, 'w') as outfile:
-            json.dump(src_dict2, outfile)
-        outfile.close()
+    os.system('rm -Rf '+img_sky_pbuncor)
 
     return(src_dict2)
 
@@ -557,136 +557,74 @@ def filterSources(src_dict, pointSourcesOnly=True, noBackgroundEmission=True, is
 
     return(src_dict1)
 
-def generateCatalog(uidList=[], uidListFile='', runFilterSources=True):
+def makeSourceList(src_dict, addKeywords=True):
 
-    if uidListFile != '':
-        f = open(uidListFile)
-        uidList = f.read().splitlines()
-        f.close()
+#     keywds = ['BMAJ', 'BMIN', 'BPA', 'BUNIT', 'RADESYS', 'SPECSYS', \
+#         'TELESCOP', 'DATE-OBS', 'TIMESYS', 'CASAVER', 'MEMBER', \
+#         'PIPEVER', 'PROPCODE', 'SPECMODE', 'WEIGHT', 'DATE', 'ORIGIN', \
+#         'ROBUST', 'IMGURL', 'CTRFREQ', 'BNDWID', 'FREQUNIT']
 
-    sourcelist_fname = []
+    src_dict1 = {}
+    ij = 0
 
-    for uid in uidList:
+    for i in src_dict.keys():
 
-        dirname = uid.replace('/', '_').replace(':', '_')
-        fname = glob.glob(dirname+'/*.sourcelist.json')
+        src_dict1[ij] = {}
 
-        for i in fname:
-            sourcelist_fname.append(i)
+        src_dict1[ij]['RA'] = src_dict[i]['shape']['direction']['RA'][0]
+        src_dict1[ij]['DEC'] = src_dict[i]['shape']['direction']['DEC'][0]
+        src_dict1[ij]['FLUX'] = src_dict[i]['flux']['value'][0]
+        src_dict1[ij]['FLUXERR'] = src_dict[i]['flux']['error'][0]
 
-    src_dict = {}
-    src_dict['RA'] = []
-    src_dict['DEC'] = []
-    src_dict['flux'] = []
-    src_dict['flux error'] = []
-    src_dict['image filename'] = []
+#         if addKeywords == True:
+# 
+#             keyw_dict = extractMetadata(src_dict[i]['image filename'])
+# 
+#             for kk in keywds:
+#                 if kk in keyw_dict.keys():
+#                     src_dict1[ij][kk] = keyw_dict[kk]
+#                 else:
+#                     src_dict1[ij][kk] = ''
 
-    for i in sourcelist_fname:
-        
-        with open(i, 'r') as f:
-            src_dict1 = json.load(f)
-        f.close()
+        ij += 1
 
-        if runFilterSources == True:
-            src_dict1 = filterSources(src_dict1)
+    return(src_dict1)
 
-        for i in src_dict1.keys():
+def extractMetadata(fitsImageName, usePLweblog=True):
 
-            src_dict['RA'].append(src_dict1[i]['shape']['direction']['RA'][0])
-            src_dict['DEC'].append(src_dict1[i]['shape']['direction']['DEC'][0])
-            src_dict['flux'].append(src_dict1[i]['flux']['value'][0])
-            src_dict['flux error'].append(src_dict1[i]['flux']['error'][0])
-            src_dict['image filename'].append(os.path.basename(src_dict1[i]['image filename']))
+    keyw_dict = {}
 
-    src_df = pd.DataFrame(src_dict)
+    with fits.open(fitsImageName) as hdul:
 
-    src_csv_data = src_df.to_csv('catalog.csv', index = False)
+        hdr_info = hdul[0].header.cards
 
-#     hdr = fits.Header()
-#     hdr['OBSERVER'] = 'ALMA'
-#     empty_primary = fits.PrimaryHDU(header=hdr)
-#
-#     df_rec = df.filter(items=['ra', 'dec', 'flux', 'flux_error', 'rms']).to_records(index=False)
-#     table_hdu = fits.BinTableHDU(data=df_rec)
-#
-#     hdul = fits.HDUList([empty_primary, table_hdu])
-#
-#     hdul.writeto('results.fits')
+        for j in range(len(hdr_info)):
+            keyw_dict[hdr_info[j][0]] = hdr_info[j][1]
 
-    return(src_df)
+    if usePLweblog == True:
 
-def extractMetadata(uidList=[], uidListFile=''):
-
-    topdirname = os.getcwd()
-
-    if uidListFile != '':
-        f = open(uidListFile)
-        uidList = f.read().splitlines()
-        f.close()
-
-    df = pd.DataFrame()
-
-    for uid in uidList:
-
-        os.chdir(topdirname)
-
-        dirname = uid.replace('/', '_').replace(':', '_')
-
-        if os.path.isdir(dirname) == False:
-            print('ERROR: no data found. Skipping.')
-            continue
-
-        os.chdir(dirname)
-
-        df_PLweblog = pd.DataFrame()
         PLweblog = glob.glob('pipeline-*')
+
         if len(PLweblog) == 1:
+        
             df_PLweblog = readPLweblog(path=PLweblog[0])
-        else:
-            print(PLweblog)
-
-        filename = glob.glob('*.pbcor.fits')
-
-        for i in range(len(filename)):
-
-            with fits.open(filename[i]) as hdul:
-                hdr_info = hdul[0].header.cards
-
-            df_dict = {}
-            df_dict['image filename'] = filename[i]
-
-            for j in range(len(hdr_info)):
-                keyw = hdr_info[j][0]
-                if keyw in ['BMAJ', 'BMIN', 'ROBUST']:
-                    df_dict[keyw] = [hdr_info[j][1]]
 
             if 'PL image filename' in df_PLweblog.columns:
 
-                ij = np.where(df_PLweblog['PL image filename'].str.contains(filename[i].replace('member.', '')) == True)[0]
+                ij = np.where(df_PLweblog['PL image filename'].str.contains(fitsImageName.replace('member.', '')) == True)[0]
                 if len(ij) == 1:
-
-# Index(['field', 'intent', 'spw', 'phasecenter', 'cell', 'imsize', 'imagename',
-#        'specmode', 'start', 'width', 'nbin', 'nchan', 'robust', 'nterms',
-#        'uvrange', 'image file', 'centre frequency of image', 'beam',
-#        'beam p.a.', 'final theoretical sensitivity', 'cleaning threshold',
-#        'clean residual peak / scaled MAD', 'non-pbcor image RMS',
-#        'pbcor image max / min', 'fractional bandwidth / nterms',
-#        'aggregate bandwidth', 'score', 'Field', 'spwname',
-#        'centre frequency of cube', 'non-pbcor image RMS / RMSmin / RMSmax',
-#        'channels', 'PL image filename'],
-#       dtype='object')
 
                     if 'cell' in df_PLweblog.columns:
 
                         cellsize = re.findall('[0-9E\.]+ *arcsec', df_PLweblog.at[ij[0], 'cell'], re.IGNORECASE)
                         if len(cellsize) > 0:
-                            df_dict['CELL'] = [float(cellsize[0].upper().replace('ARCSEC', ''))]
+                            keyw_dict['CELL'] = float(cellsize[0].upper().replace('ARCSEC', ''))
 
-                    if 'ROBUST' not in df_dict.keys() and 'robust' in df_PLweblog.columns:
+                    if 'ROBUST' not in keyw_dict.keys() and 'robust' in df_PLweblog.columns:
 
                         robustfactor = re.findall('-?[0-2](\.[0-9]+)?', str(df_PLweblog.at[ij[0], 'robust']))
                         if len(robustfactor) > 0:
-                            df_dict['ROBUST'] = [float(robustfactor[0])]
+                            keyw_dict['ROBUST'] = float(robustfactor[0])
 
                     if 'final theoretical sensitivity' in df_PLweblog.columns:
 
@@ -694,10 +632,10 @@ def extractMetadata(uidList=[], uidListFile=''):
                         if len(rms0) > 0:
                             rms0 = rms0[0]
                             if re.search('mjy/beam', rms0, re.IGNORECASE) != None:
-                                df_dict['RMS0'] = [float(rms0.upper().replace('MJY/BEAM', ''))/1000.]
+                                keyw_dict['RMS0'] = float(rms0.upper().replace('MJY/BEAM', ''))/1000.
                             else:
                                 if re.search('jy/beam', rms0, re.IGNORECASE) != None:
-                                    df_dict['RMS0'] = [float(rms0.upper().replace('JY/BEAM', ''))]
+                                    keyw_dict['RMS0'] = float(rms0.upper().replace('JY/BEAM', ''))
 
                     if 'non-pbcor image RMS' in df_PLweblog.columns:
 
@@ -705,14 +643,9 @@ def extractMetadata(uidList=[], uidListFile=''):
                         if len(rms1) > 0:
                             rms1 = rms1[0]
                             if re.search('mjy/beam', rms1, re.IGNORECASE) != None:
-                                df_dict['RMS1'] = [float(rms1.upper().replace('MJY/BEAM', ''))/1000.]
+                                keyw_dict['RMS1'] = float(rms1.upper().replace('MJY/BEAM', ''))/1000.
                             else:
                                 if re.search('jy/beam', rms1, re.IGNORECASE) != None:
-                                    df_dict['RMS1'] = [float(rms1.upper().replace('JY/BEAM', ''))]
+                                    keyw_dict['RMS1'] = float(rms1.upper().replace('JY/BEAM', ''))
 
-            dff = pd.DataFrame(df_dict)
-            df = pd.concat([df, dff], ignore_index=True)
-
-    os.chdir(topdirname)
-
-    return(df)
+    return(keyw_dict)
